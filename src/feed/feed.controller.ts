@@ -6,15 +6,11 @@ import * as updatePost from '../interfaces/update.like';
 
 @Controller()
 export class FeedController {
-  constructor(
-    private readonly feedService: FeedService,
-  ) {}
+  constructor(private readonly feedService: FeedService) {}
 
   @Get(':userId')
   async getFeed(@Param('userId') userId: string) {
-    const createPostDtos = await this.feedService.getFeedForUser(userId);
-    console.log('createPostDtos', createPostDtos);
-    return createPostDtos;
+    return await this.feedService.getFeedForUser(userId);
   }
 
   @MessagePattern('post.created')
