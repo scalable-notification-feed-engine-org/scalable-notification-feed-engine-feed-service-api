@@ -4,7 +4,7 @@ import * as createPost from '../interfaces/create.post';
 import { FeedService } from './feed.service';
 import * as updatePost from '../interfaces/update.like';
 
-@Controller()
+@Controller('/api/v1/feed')
 export class FeedController {
   constructor(private readonly feedService: FeedService) {}
 
