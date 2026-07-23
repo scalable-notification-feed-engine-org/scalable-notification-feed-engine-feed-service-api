@@ -6,4 +6,5 @@ export interface CreatePostDto {
   createdAt: string;
   likeCount: number;
   commentCount: number;
+  isLike: boolean;
 }
