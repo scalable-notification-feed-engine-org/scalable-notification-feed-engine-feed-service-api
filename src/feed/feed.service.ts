@@ -18,22 +18,27 @@ export class FeedService {
     await redis.zremrangebyrank(globalKey, 0, -101);
   }
 
-  async getFeedForUser(userId: string): Promise<CreatePostDto[]> {
+  async getFeedForUser(userId: string): Promise<any[]> {
     console.log('Getting feed for user', userId);
     const redis = this.redisService.getClient();
     const globalKey = `global:feed`;
+    const userLikesKey = `user:${userId}:likes`;
 
     const posts = await redis.zrevrange(globalKey, 0, 19);
 
-    return posts
+    const likedPostIds = await redis.smembers(userLikesKey);
+    const likedSet = new Set(likedPostIds);
+
+    const parsePosts = posts
       .map((post) => {
         try {
           if (typeof post === 'string') {
-            const parsed = JSON.parse(post) as CreatePostDto;
+            const parsed = JSON.parse(post) as Record<string, any>;
 
-            if (typeof parsed === 'object' && parsed !== null && parsed.id) {
-              return parsed;
-            }
+            return {
+              ...parsed,
+              isLike: likedSet.has(parsed.id),
+            };
           }
           return null;
         } catch {
@@ -41,13 +46,21 @@ export class FeedService {
           return null;
         }
       })
-      .filter((post): post is CreatePostDto => post !== null);
+      .filter((post) => post !== null);
+
+    return parsePosts;
   }
 
   async updateLikeCount(data: UpdateLike) {
     const redis = this.redisService.getClient();
-
     const globalKey = `global:feed`;
+    const userLikesKey = `user:${data.userId}:likes`;
+
+    if (data.isLike) {
+      await redis.sadd(userLikesKey, data.postId);
+    } else {
+      await redis.srem(userLikesKey, data.postId);
+    }
     const allPost = await redis.zrange(globalKey, 0, -1);
 
     const targetPostString = allPost.find((p) => {
@@ -76,8 +89,10 @@ export class FeedService {
 
       const updatedPostString = JSON.stringify(postObj);
       await redis.zrem(globalKey, targetPostString);
-      const addResult = await redis.zadd(globalKey, score, updatedPostString);
-      console.log(`Redis Update Success: ${addResult} (Should be 1)`);
+      await redis.zadd(globalKey, score, updatedPostString);
+      console.log(
+        `Redis Global Feed LikeCount Updated for Post: ${data.postId}`,
+      );
     } else {
       console.warn(`Post ${data.postId} not found in Redis global feed.`);
     }
