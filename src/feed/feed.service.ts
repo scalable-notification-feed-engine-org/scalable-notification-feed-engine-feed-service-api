@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { RedisService } from '../redis/redis.service';
 import { CreatePostDto } from '../interfaces/create.post';
 import { UpdateLike } from '../interfaces/update.like';
+import { UpdateComment } from '../interfaces/update.comment';
 
 @Injectable()
 export class FeedService {
@@ -19,7 +20,6 @@ export class FeedService {
   }
 
   async getFeedForUser(userId: string): Promise<any[]> {
-    console.log('Getting feed for user', userId);
     const redis = this.redisService.getClient();
     const globalKey = `global:feed`;
     const userLikesKey = `user:${userId}:likes`;
@@ -29,15 +29,16 @@ export class FeedService {
     const likedPostIds = await redis.smembers(userLikesKey);
     const likedSet = new Set(likedPostIds);
 
-    const parsePosts = posts
+    return posts
       .map((post) => {
         try {
           if (typeof post === 'string') {
             const parsed = JSON.parse(post) as Record<string, any>;
-
             return {
               ...parsed,
               isLike: likedSet.has(parsed.id),
+              comments: parsed.comments || [],
+              userName: parsed.userName,
             };
           }
           return null;
@@ -47,8 +48,6 @@ export class FeedService {
         }
       })
       .filter((post) => post !== null);
-
-    return parsePosts;
   }
 
   async updateLikeCount(data: UpdateLike) {
@@ -90,9 +89,82 @@ export class FeedService {
       const updatedPostString = JSON.stringify(postObj);
       await redis.zrem(globalKey, targetPostString);
       await redis.zadd(globalKey, score, updatedPostString);
-      console.log(
-        `Redis Global Feed LikeCount Updated for Post: ${data.postId}`,
+    } else {
+      console.warn(`Post ${data.postId} not found in Redis global feed.`);
+    }
+  }
+
+  async updateComment(data: UpdateComment): Promise<void> {
+    const redis = this.redisService.getClient();
+    const globalKey = `global:feed`;
+
+    const allPost: string[] = await redis.zrange(globalKey, 0, -1);
+
+    let targetPostString: string | null = null;
+    let parsedPost: Record<string, unknown> | null = null;
+
+    for (const p of allPost) {
+      const parsed: Record<string, unknown> | null = (() => {
+        try {
+          const item = JSON.parse(p) as unknown;
+          return item && typeof item === 'object'
+            ? (item as Record<string, unknown>)
+            : null;
+        } catch {
+          return null;
+        }
+      })();
+
+      if (parsed && parsed.id === data.postId) {
+        targetPostString = p;
+        parsedPost = parsed;
+        break;
+      }
+    }
+
+    if (targetPostString && parsedPost) {
+      const existingComments = Array.isArray(parsedPost.comments)
+        ? (parsedPost.comments as Record<string, unknown>[])
+        : [];
+
+      const userName = data.userName || 'Unknown User';
+      const rawIncoming = Array.isArray(data.comments)
+        ? data.comments
+        : (data as any).comment
+          ? [(data as any).comment]
+          : [
+              {
+                id: (data as any).commentId || Date.now().toString(),
+                content: (data as any).content || '',
+                userId: (data as any).userId || '',
+                createdAt: new Date().toISOString(),
+              },
+            ];
+
+      const incomingComments: Record<string, unknown>[] = rawIncoming.map(
+        (cmt: any) => ({
+          ...cmt,
+          userName: cmt.userName || userName,
+        }),
       );
+
+      parsedPost.comments = [...existingComments, ...incomingComments];
+      parsedPost.commentCount = (parsedPost.comments as any[]).length;
+
+      const score: string | null = await redis.zscore(
+        globalKey,
+        targetPostString,
+      );
+      let numericScore: number = score !== null ? Number(score) : Date.now();
+
+      if (isNaN(numericScore)) {
+        numericScore = Date.now();
+      }
+
+      const updatedPostString = JSON.stringify(parsedPost);
+
+      await redis.zrem(globalKey, targetPostString);
+      await redis.zadd(globalKey, numericScore, updatedPostString);
     } else {
       console.warn(`Post ${data.postId} not found in Redis global feed.`);
     }
